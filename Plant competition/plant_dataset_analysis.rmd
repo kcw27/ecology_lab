@@ -1,0 +1,119 @@
+---
+title: "Plant Competition Dataset & Analysis"
+author: "Katie Wang"
+date: "4/2/22"
+output:
+  pdf_document: default
+  html_document: default
+---
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+theme_set(theme_classic())
+```
+
+
+## Hypotheses
+1. At higher nitrogen levels, average plant biomass will be higher because nitrogen is a nutrient and low nitrogen will limit the amount of plant growth possible.
+2. At higher competition levels (with competition being defined as more plants growing in a single pot, regardless of species), average biomass of each plant will be lower because each plant must allocate resources toward root growth to access soil nutrients and water rather than toward aboveground growth (which is what we are measuring as biomass).
+3. At lower nitrogen levels, the decrease in average plant biomass due to competition will be greater that it is at higher nitrogen levels because the scarcity of nitrogen will compound with competition to cause plants to allocate more resources toward root growth rather than aboveground growth.
+4. As competition increases, mustard plants will have a greater decrease in biomass (proportional to the mustard's average biomass) than pea plants will (proportional to the pea's average biomass) because pea plants, as legumes, are able to fix nitrogen and therefore do not have to devote as much root growth toward accessing usable soil nitrogen as mustard does.
+
+## Data description
+```{r}
+plant_data <- read.csv("Plant experiment data.csv") %>%
+  mutate(Avg.biomass.within.species = Mass.of.plant/X..sprouted)
+head(plant_data)
+```
+In each pot, we planted pea and mustard seeds in different number combinations (to manipulate competition level, creating both conspecific and heterospecific competition) and in soil of high or low nitrogen levels. Biomass is defined as the dry mass of above-soil portions of plants, and a single measure is taken per species per pot rather than by individual plant. In creating our models, we will assume that the strength of competition from both species is equal and that conspecific and heterospecific competition are also equal in strength. The amount of competition is defined as the number of plants that sprouted in a single pot, including plants of all species present in that pot. In some pots, none of the seeds of a given species sprouted, but the data is still included to distinguish these instances from instances in which only a single species was planted in a pot.  
+The column Avg.biomass.within.species will be used for testing hypothesis 4, as the response variable is the average growth of a particular species of plant in a pot rather than the average across the whole pot.  
+Each pot has a unique ID, so separate rows with the same ID indicate plants of different species from the same pot. The pots were harvested on different dates, so the date of harvest is also included.  
+
+In order to test hypotheses 1, 2, and 3, we will need to create a table of the total competition (i.e. number of sprouted plants) and average biomass of a plant in each pot (PerPlant.Biomass), making the assumption that there is about the same number of pea and mustard plants in each competition condition. We are finding the average biomass per pot rather than using absolute biomass in order to normalize by the number of sprouts in each pot. We also need to include nitrogen levels. 
+```{r}
+plant_per_pot <- plant_data %>%
+  group_by(ID) %>%
+  summarise(Nitrogen = Nitrogen, Total.Sprouted = sum(X..sprouted), 
+            Total.Biomass = sum(Mass.of.plant), 
+            PerPlant.Biomass = sum(Mass.of.plant)/sum(X..sprouted)) %>%
+  distinct() #summarise() had created identical rows for the pots w/ multiple species
+
+head(plant_per_pot)
+```
+For hypothesis 4, I need to plot biomasses for species separately but as a function of total number of sprouts per pot, so I joined the Total.Sprouted values to the plant_data dataframe (but kept it under a different name for the sake of clarity).  
+```{r}
+plant_data_joined <- left_join(plant_data, 
+                               plant_per_pot %>% select(ID, Total.Sprouted), 
+                               by = "ID")
+head(plant_data_joined)
+```
+
+
+## Data analysis
+
+### Hypothesis 1
+```{r}
+summary(lm(PerPlant.Biomass ~ Nitrogen, data = plant_per_pot))
+
+ggplot(plant_per_pot, aes(x = Nitrogen, y = PerPlant.Biomass)) + 
+  geom_boxplot() +
+  xlab("Nitrogen level in soil") +
+  ylab("Average biomass of plant (g)")
+```
+Our data reject the hypothesis. Though linear regression shows that soil nitrogen levels do have a significant effect on biomass, as the slope of the fitted line is significantly different from 0 (p=0.03797), the box plot shows that the effect is in the direction opposite of what we had expected. That is, biomass achieves higher values in low nitrogen conditions.
+
+### Hypothesis 2
+```{r}
+summary(lm(PerPlant.Biomass ~ Total.Sprouted, data = plant_per_pot))
+
+ggplot(plant_per_pot, aes(x = Total.Sprouted, y = PerPlant.Biomass)) + 
+  geom_point() +
+  stat_smooth(method = "lm") +
+  xlab("Competition (# sprouted in pot)") +
+  ylab("Avg biomass of plant (g)")
+```
+Our hypothesis was rejected, as linear regression did not find a significant effect of competition on the average biomass of plants. The slope of the fitted line is not significantly different from 0 (p=0.06371). Note that this conclusion applies to biomass averaged across entire pots, rather than biomass averaged within plant species in each pot, as is the case in hypothesis 4.
+
+### Hypothesis 3
+```{r}
+# two-way ANOVA interactive model
+model1_hyp3 = lm(PerPlant.Biomass ~ Nitrogen + Total.Sprouted, data = plant_per_pot)
+model2_hyp3 = lm(PerPlant.Biomass ~ Nitrogen * Total.Sprouted, data = plant_per_pot)
+anova(model1_hyp3, model2_hyp3)
+
+# ANOVA tells us that there's no significant difference between the models, so we go with the additive model because the interaction model's additional explanatory power is not worth the degree of freedom lost by introducing that additional term.
+model1_hyp3 %>% summary()
+
+ggplot(plant_per_pot, aes(x = Total.Sprouted, y = PerPlant.Biomass, color = Nitrogen)) + 
+  geom_point() +
+  geom_smooth(method='lm') +
+  xlab("Competition (# sprouted in pot)") +
+  ylab("Avg biomass of plant (g)") +
+  facet_wrap(~Nitrogen)
+```
+According to ANOVA analysis, there is no significant difference between the additive and interactive models for the effect of nitrogen and competition on biomass (p=0.6074). This means that there is no interaction between nitrogen and competition in determining biomass, and so we reject our hypothesis. In addition, the plot suggests that average biomass does not decrease as competition increases; this is consistent with our rejection of hypothesis #2. 
+
+### Hypothesis 4
+```{r}
+model1_hyp4 = lm(Avg.biomass.within.species ~ Total.Sprouted + Species, data = plant_data_joined)
+model2_hyp4 = lm(Avg.biomass.within.species ~ Total.Sprouted * Species, data = plant_data_joined)
+anova(model1_hyp4, model2_hyp4)
+
+ggplot(plant_data_joined, aes(x = Total.Sprouted, y = Avg.biomass.within.species, color = Species)) + 
+  geom_point() +
+  geom_smooth(method='lm') +
+  xlab("Competition (# sprouted in pot)") +
+  ylab("Biomass, averaged w/in species (g)") +
+  facet_wrap(~Species)
+
+ggplot(plant_data_joined %>% filter(Species == "Mustard"), 
+       aes(x = Total.Sprouted, y = Avg.biomass.within.species)) + 
+  geom_point() +
+  geom_smooth(method='lm') +
+  xlab("Competition (# sprouted in pot)") +
+  ylab("Biomass, averaged w/in species (g)") +
+  ylim(0, 0.02)
+```
+In addition to plotting data from both species, I have also plotted the mustard data alone to better show the slope of the regression line.  
+By comparing the slopes of the two linear regressions in anova(), we are doing an assessment of loss (or gain) of biomass growth due to competition that is independent of how large the plant tends to grow. (Or at least that is the intention.)  
+ANOVA analysis disproves our hypothesis. Although the effect of competition on biomass is very different between the two species (ANOVA comparison of slopes of linear regressions fitted to data grouped by species, p=0.006609), we observe that while average mustard plant biomass does not seem to depend on competition, average pea plant biomass seems to increase with competition. There is no decrease in biomass due to competition like we had hypothesized.
