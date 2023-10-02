@@ -1,0 +1,175 @@
+---
+title: 'Dataset & Analysis: Rocky Intertidal Experiment'
+author: "Katie Wang"
+date: "3/4/22"
+output:
+  pdf_document: default
+  html_document: default
+---
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(vegan)
+library(infer)
+theme_set(theme_classic())
+```
+```{r}
+rocky_intertidal_unedited <- read_csv("RockyIntertidalData.csv")
+rocky_intertidal <- rocky_intertidal_unedited %>%
+  filter(Index != 10 & Index != 11 & Index != 12) # tried to figure out how to 
+# do this filtering with %if% but it didn't work
+
+# formatting it like dune and dune.env:
+rocky <- rocky_intertidal %>%
+  select('CA mussel',	'Buckshot barnacle',	'Goose barnacle',	'Thatched Barnacle', 
+         'Aggregate anemone', 'Solitary anemone',	'Lottia limpet',	'Periwinkle',	'Chitin')
+rocky.env <- rocky_intertidal %>%
+  select('Index',	'X coordinate',	'Y coordinate',	'Zone',	'Student')
+```
+
+
+## Hypotheses
+1. High-intertidal communities will have lower diversity in sessile animal species than mid-intertidal communities do, because high-intertidal zones are submerged for less of the day, therefore demanding greater desiccation resistance. The high-intertidal zone will have lower species richness because few marine species are adapted to desiccation, and longer periods of desiccation are less tolerable. The high-intertidal zone will also have lower evenness because there will be many individuals from common desiccation-resistance species and few from rare non-resistant species.  
+
+2. High-intertidal communities will have lower abundance of sessile animal species than mid-intertidal communities do, because water is more scarce in high-intertidal communities. This causes greater competition for water in high-intertidal communities, which means that fewer individuals can be supported.
+
+## Data description
+We sampled a total of 32 quadrats (20 cm x 20 cm) at the Laguna Beach rocky intertidal zone: 16 in the mid-intertidal zone and 16 in the high-intertidal zone. For each sample, we randomized the coordinates of the sampling site, as well as one of the 16 squares in the quadrat. We recorded the index of the sample (numbered 1-32), the zone type (mid- or high-intertidal), which student collected the sample (which may be useful for explaining patterns in the data), and the number of each species encountered within the quadrat. For mussels and buckshot barnacles, which were very abundant, we estimated abundance within the quadrat by counting individuals within a single randomized square (mentioned earlier) and multiplying these numbers by 16. For the other species, we counted the exact number of individuals in the quadrat. Samples 10-12 are excluded from analysis due to severe overestimation of the number of limpets (a rare species).
+
+```{r}
+head(rocky)
+head(rocky.env)
+```
+
+
+## Data analysis
+
+### Hypothesis 1
+
+#### Species Diversity
+```{r}
+rocky.diversity <- rocky.env %>%
+  mutate(Shannon=diversity(rocky,index="shannon",base=2))
+
+rocky.diversity %>%
+  ggplot() +
+    geom_boxplot(mapping = aes(x = Zone, y = Shannon)) +
+    ylab("Shannon index of diversity") +
+    ylim(0, log2(ncol(rocky))) #log base 2 of the number of species in total is 
+# the max of Shannon index
+
+# check for normality here
+qqnorm(rocky.diversity$Shannon)
+qqline(rocky.diversity$Shannon)
+# does not look normally distributed, so I'll use Kruskal-Wallis test
+kruskal.test(Shannon ~ Zone, data = rocky.diversity)
+```
+I chose to analyze Shannon's index of diversity, rather than Simpson's index of diversity. Shannon's is more suited for detecting differences in rare species between groups, while Simpson's tells us more about differences in common species between groups. I'd like to focus on rare species because I'm more interested in species richness than in relative abundance of species within each zone.  
+The Kruskal-Wallis test for difference in Shannon diversity between zones yields p=0.01078. This is a significant difference. The box plot shows that the mid-intertidal zone has higher diversity than the high-intertidal zone, so my hypothesis is supported.
+
+
+#### Species Richness
+```{r}
+rockySR.byzone <- specpool(rocky, pool=rocky.env$Zone) %>%
+  rownames_to_column(var="Zone")
+rockySR.byzone
+
+rockySR.byzone %>% 
+  ggplot(aes(x=Zone,y=chao)) + 
+  geom_point() +
+  geom_errorbar(aes(ymax=chao + chao.se, ymin=chao-chao.se), width=0.15) +
+  ylim(0, 21) +
+  xlab("Intertidal zone") +
+  ylab("Chao1 species richness estimation")
+
+rich_v <- (rocky$'CA mussel'>0) + (rocky$'Buckshot barnacle'>0) + 
+  (rocky$'Goose barnacle'>0) + (rocky$'Thatched Barnacle'>0) + 
+  (rocky$'Aggregate anemone'>0) + (rocky$'Solitary anemone'>0) + 
+  (rocky$'Lottia limpet'>0) + (rocky$'Periwinkle'>0) + (rocky$'Chitin'>0)
+# exploit addition of Boolean operators
+
+rocky_intertidal <- rocky_intertidal %>%
+  mutate(spec_count = rich_v)
+
+rocky_intertidal %>% 
+  group_by(Zone) %>%
+  summarize(mean_richness = mean(spec_count), median_richness = median(spec_count), 
+            min_richness = min(spec_count), max_richness = max(spec_count), num_samples = n())
+
+# I went to worksheet 13 from biostats to review randomization. Now I can get a p-value!
+set.seed(2021)
+
+null_rocky <- rocky_intertidal %>%
+  specify(spec_count ~ Zone) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1000, type = "permute") %>% 
+  calculate(stat = "diff in means", order = c("Mid", "High"))
+
+null_rocky %>%
+  get_p_value(obs_stat = 0, direction = "two-sided")
+
+visualize(null_rocky) +
+  shade_p_value(obs_stat = 0, direction = "two-sided")
+```
+There is no significant difference in species richness between the two zones. The error bars on the plot of Chao1 species diversity overlap each other (though it should be mentioned that while the error bars for "Mid" overlap the mean of "High", the error bars for "High" do not overlap the mean of "Mid"). I wasn't sure how to find 95% confidence intervals for Chao1.  
+I've also included summary tables for the Chao1 statistics and for the species counts, grouped by zone.
+EDIT: now that I've done randomization (yeah I know, old-fashioned people prefer stuff like 95% CI but randomization is the simplest thing I can do and I don't feel like spending too much time on my data when there are so many other fires to put out in my lab report draft) I got p=0.956 on the null hypothesis "there's no difference in mean number of species found per zone" (i.e. diff between zones in means of spec_count is 0). Something feels off, so I'll ask if I really need this and just... not include it if I don't.
+
+#### Evenness
+```{r}
+# adding a new column for evenness
+rocky_intertidal <- rocky_intertidal %>%
+  mutate(evenness = rocky.diversity$Shannon / rocky_intertidal$spec_count)
+# evenness normalized by observed richness per sample 
+
+rocky_intertidal %>%
+  ggplot() +
+    geom_boxplot(mapping = aes(x = Zone, y = evenness)) +
+    ylab("Evenness") 
+
+# check for normality here
+qqnorm(rocky_intertidal$evenness)
+qqline(rocky_intertidal$evenness)
+# does not look normally distributed, so I'll use Kruskal-Wallis test
+kruskal.test(evenness ~ Zone, data = rocky_intertidal)
+
+rocky_intertidal %>%
+  group_by(Zone) %>%
+  filter(!is.na(evenness)) %>%
+  summarize(n=n(), mean = mean(evenness), median = median(evenness), min = min(evenness), max = max(evenness))
+```
+The Kruskal-Wallis test on difference in evenness between zones does not support my hypothesis that there is a significant difference in evenness and that evenness is higher in the mid-intertidal zone (p=0.08923). However, the mean evenness 
+
+### Hypothesis 2
+
+#### Abundance
+```{r}
+# adding an abundance column
+rocky_intertidal <- rocky_intertidal %>% 
+  mutate(total_abundances = rocky$'CA mussel' + rocky$'Buckshot barnacle' + 
+           rocky$'Goose barnacle' + rocky$'Thatched Barnacle' + rocky$'Aggregate anemone' + 
+           rocky$'Solitary anemone' + rocky$'Lottia limpet' + rocky$'Periwinkle' + rocky$'Chitin')
+
+rocky_intertidal %>%
+  ggplot() +
+    geom_boxplot(mapping = aes(x = Zone, y = total_abundances)) +
+    ylab("Abundance") 
+
+# check for normality here
+qqnorm(rocky_intertidal$total_abundances)
+qqline(rocky_intertidal$total_abundances)
+# does not look normally distributed, so I'll use Kruskal-Wallis test
+kruskal.test(total_abundances ~ Zone, data = rocky_intertidal)
+```
+The Kruskal-Wallis test supports the hypothesis that the abundances are different between zones (p=0.01787, a=0.05), with abundances higher in the mid-intertidal zone (as seen in the box plot).
+
+Overall summary table
+```{r}
+rocky_intertidal_with_Shannon <- rocky_intertidal %>%
+  mutate(Shannon=diversity(rocky,index="shannon",base=2))
+  
+rocky_intertidal_with_Shannon %>%
+  group_by(Zone) %>%
+  summarize(n=n(), mean_species_count=mean(spec_count), mean_evenness=mean(na.omit(evenness)), mean_Shannon = mean(Shannon), mean_abundance = mean(total_abundances))
+```
+
